@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2023 salesforce.com, inc.
+# Copyright (c) 2025 salesforce.com, inc.
 # All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 # For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/BSD-3-Clause
@@ -208,5 +208,181 @@ class BoxCoxTransform(InvertibleTransformBase):
             else:
                 var = var.apply(np.exp)
             new_vars.append(UnivariateTimeSeries.from_pd(var - self.offset))
+
+        return TimeSeries(new_vars)
+
+
+class SpikeAmplification(InvertibleTransformBase):
+    """
+    Amplifies spikes (extreme values) in the time series to improve sensitivity
+    to high quantile losses (e.g., 0.99 quantile) which punish underprediction.
+
+    This transform identifies values above a certain percentile threshold and
+    amplifies them using a power transformation, making the model more sensitive
+    to extreme upward movements while preserving the overall distribution shape.
+
+    The transformation works as follows:
+    1. Compute baseline statistics (mean, std, or quantiles) from training data
+    2. For values above the spike threshold, apply amplification:
+       - Linear amplification: spike_value * amplification_factor
+       - Power amplification: spike_value ** amplification_power (when power > 1)
+    3. Smooth transition using a sigmoid function to avoid discontinuities
+    """
+
+    def __init__(
+        self,
+        spike_threshold_quantile=0.75,
+        amplification_factor=1.5,
+        amplification_power=1.2,
+        smoothing_window=0.1,
+        use_power=False,
+    ):
+        """
+        :param spike_threshold_quantile: Quantile threshold above which values are considered spikes (0-1).
+            Default 0.75 means top 25% of values are amplified.
+        :param amplification_factor: Linear amplification factor for spike values. Default 1.5.
+        :param amplification_power: Power to raise spike values to (when use_power=True). Default 1.2.
+        :param smoothing_window: Window for smooth transition (as fraction of threshold). Default 0.1.
+        :param use_power: If True, use power amplification instead of linear. Default False.
+        """
+        super().__init__()
+        assert 0 < spike_threshold_quantile < 1, "spike_threshold_quantile must be between 0 and 1"
+        assert amplification_factor >= 1, "amplification_factor must be >= 1"
+        assert amplification_power >= 1, "amplification_power must be >= 1"
+        assert 0 < smoothing_window < 1, "smoothing_window must be between 0 and 1"
+
+        self.spike_threshold_quantile = spike_threshold_quantile
+        self.amplification_factor = amplification_factor
+        self.amplification_power = amplification_power
+        self.smoothing_window = smoothing_window
+        self.use_power = use_power
+
+        # These will be set during training
+        self.threshold = None
+        self.mean = None
+        self.std = None
+
+    @property
+    def requires_inversion_state(self):
+        """
+        ``False`` because we store the statistics needed for inversion.
+        """
+        return False
+
+    def train(self, time_series: TimeSeries):
+        """
+        Compute spike thresholds and statistics from training data.
+        """
+        self.threshold = {}
+        self.mean = {}
+        self.std = {}
+
+        for name, var in time_series.items():
+            values = var.np_values
+            self.threshold[name] = float(np.quantile(values, self.spike_threshold_quantile))
+            self.mean[name] = float(np.mean(values))
+            self.std[name] = float(np.std(values))
+
+        logger.info(
+            f"SpikeAmplification trained with thresholds: {self.threshold}, "
+            f"amplification_factor={self.amplification_factor}"
+        )
+
+    def _smooth_amplification(self, x, threshold, smoothing_range):
+        """
+        Apply smooth amplification using a sigmoid-like transition.
+
+        :param x: Input values
+        :param threshold: Spike threshold
+        :param smoothing_range: Range for smooth transition
+        :return: Amplification weights (1.0 for normal values, up to amplification_factor for spikes)
+        """
+        # Sigmoid function centered at threshold
+        # For x < threshold - smoothing_range: weight = 1.0
+        # For x > threshold + smoothing_range: weight = amplification_factor
+        # In between: smooth transition
+
+        normalized = (x - threshold) / (smoothing_range + 1e-8)
+        sigmoid = 1 / (1 + np.exp(-6 * normalized))  # Steepness factor = 6
+
+        # Scale sigmoid from [0, 1] to [1, amplification_factor]
+        weight = 1.0 + (self.amplification_factor - 1.0) * sigmoid
+
+        return weight
+
+    def __call__(self, time_series: TimeSeries) -> TimeSeries:
+        """
+        Apply spike amplification to the time series.
+        """
+        if self.threshold is None:
+            raise RuntimeError("SpikeAmplification must be trained before use!")
+
+        new_vars = OrderedDict()
+
+        for name, var in time_series.items():
+            values = var.np_values.copy()
+            threshold = self.threshold[name]
+            mean = self.mean[name]
+            std = self.std[name]
+
+            # Compute smoothing range
+            smoothing_range = self.smoothing_window * std
+
+            if self.use_power:
+                # Power-based amplification for values above threshold
+                # Normalize, apply power, denormalize
+                above_threshold = values > threshold
+                if above_threshold.any():
+                    normalized = (values[above_threshold] - mean) / (std + 1e-8)
+                    # Apply power only to positive deviations
+                    amplified = np.sign(normalized) * (np.abs(normalized) ** self.amplification_power)
+                    values[above_threshold] = mean + amplified * std
+            else:
+                # Smooth linear amplification
+                weights = self._smooth_amplification(values, threshold, smoothing_range)
+                # Amplify deviation from mean
+                values = mean + (values - mean) * weights
+
+            new_vars[name] = UnivariateTimeSeries(var.index, values, name=var.name)
+
+        return TimeSeries(new_vars)
+
+    def _invert(self, time_series: TimeSeries) -> TimeSeries:
+        """
+        Invert the spike amplification transform.
+        """
+        if self.threshold is None:
+            raise RuntimeError("SpikeAmplification must be trained before inversion!")
+
+        new_vars = OrderedDict()
+
+        for name, var in time_series.items():
+            values = var.np_values.copy()
+            threshold = self.threshold[name]
+            mean = self.mean[name]
+            std = self.std[name]
+
+            # Compute smoothing range
+            smoothing_range = self.smoothing_window * std
+
+            if self.use_power:
+                # Invert power amplification
+                # Estimate which values were amplified (approximate)
+                # This is an approximation since we don't know exact original values
+                amplified_threshold = mean + ((threshold - mean) * self.amplification_factor)
+                above_amplified = values > amplified_threshold
+
+                if above_amplified.any():
+                    normalized = (values[above_amplified] - mean) / (std + 1e-8)
+                    # Invert power
+                    deamplified = np.sign(normalized) * (np.abs(normalized) ** (1.0 / self.amplification_power))
+                    values[above_amplified] = mean + deamplified * std
+            else:
+                # Invert smooth linear amplification
+                weights = self._smooth_amplification(values, threshold, smoothing_range)
+                # De-amplify deviation from mean
+                values = mean + (values - mean) / (weights + 1e-8)
+
+            new_vars[name] = UnivariateTimeSeries(var.index, values, name=var.name)
 
         return TimeSeries(new_vars)
