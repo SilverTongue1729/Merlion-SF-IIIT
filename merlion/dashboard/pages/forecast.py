@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2023 salesforce.com, inc.
+# Copyright (c) 2025 salesforce.com, inc.
 # All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 # For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/BSD-3-Clause
@@ -88,6 +88,24 @@ def create_control_panel() -> html.Div:
                 children=[dcc.Dropdown(id="forecasting-select-exog", options=[], multi=True, style={"width": "100%"})],
             ),
             html.Br(),
+            html.P("Select Data Preprocessing Transform (Optional)"),
+            html.Div(
+                id="forecasting-select-transform-parent",
+                children=[dcc.Dropdown(id="forecasting-select-transform", options=[], style={"width": "100%"})],
+            ),
+            html.Br(),
+            dbc.Collapse(
+                html.Div(
+                    id="control-card",
+                    children=[
+                        html.P("Transform Parameters"),
+                        html.Div(id="forecasting-transform-param-table", children=[]),
+                        html.Br(),
+                    ],
+                ),
+                id="forecasting-transform-collapse",
+                is_open=False,
+            ),
             html.P("Select Forecasting Algorithm"),
             html.Div(
                 id="forecasting-select-algorithm-parent",

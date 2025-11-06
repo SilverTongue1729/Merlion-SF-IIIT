@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2023 salesforce.com, inc.
+# Copyright (c) 2025 salesforce.com, inc.
 # All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 # For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/BSD-3-Clause
@@ -13,6 +13,11 @@ from dash import Input, Output, State, dcc, callback
 from merlion.dashboard.utils.file_manager import FileManager
 from merlion.dashboard.models.forecast import ForecastModel
 from merlion.dashboard.pages.utils import create_param_table, create_metric_table, create_empty_figure
+from merlion.dashboard.utils.transform_utils import (
+    get_available_transforms,
+    get_transform_param_info,
+    get_transform_defaults,
+)
 
 logger = logging.getLogger(__name__)
 file_manager = FileManager()
@@ -152,6 +157,52 @@ def select_algorithm(algorithm):
 
 
 @callback(
+    Output("forecasting-select-transform", "options"),
+    Input("forecasting-select-transform-parent", "n_clicks"),
+)
+def update_transform_dropdown(n_clicks):
+    """Populate transform dropdown with available transforms."""
+    options = []
+    ctx = dash.callback_context
+    prop_id = ctx.triggered_id
+    if prop_id == "forecasting-select-transform-parent":
+        transforms = get_available_transforms()
+        options += [{"label": s, "value": s} for s in transforms]
+    return options
+
+
+@callback(
+    Output("forecasting-transform-param-table", "children"),
+    Output("forecasting-transform-collapse", "is_open"),
+    Input("forecasting-select-transform", "value"),
+    prevent_initial_call=True,
+)
+def update_transform_params(selected_transform):
+    """Generate parameter form for selected transform."""
+    if not selected_transform:
+        return [], False
+
+    try:
+        # Get parameter info for the transform
+        param_info = get_transform_param_info(selected_transform)
+
+        # Get default values
+        defaults = get_transform_defaults(selected_transform)
+
+        # Update param_info with defaults
+        for name, info in param_info.items():
+            if name in defaults and info["default"] == "":
+                info["default"] = defaults[name]
+
+        # Create parameter table
+        param_table = create_param_table(param_info)
+        return param_table, True
+    except Exception as e:
+        logger.error(f"Error getting transform parameters: {e}")
+        return [], False
+
+
+@callback(
     Output("forecasting-training-metrics", "children"),
     Output("forecasting-test-metrics", "children"),
     Output("forecasting-plots", "children"),
@@ -163,6 +214,8 @@ def select_algorithm(algorithm):
         State("forecasting-select-target", "value"),
         State("forecasting-select-features", "value"),
         State("forecasting-select-exog", "value"),
+        State("forecasting-select-transform", "value"),
+        State("forecasting-transform-param-table", "children"),
         State("forecasting-select-algorithm", "value"),
         State("forecasting-param-table", "children"),
         State("forecasting-training-slider", "value"),
@@ -186,6 +239,8 @@ def click_train_test(
     target_col,
     feature_cols,
     exog_cols,
+    transform_name,
+    transform_table,
     algorithm,
     table,
     train_percentage,
@@ -220,12 +275,31 @@ def click_train_test(
                     test_df = ForecastModel().load_data(os.path.join(file_manager.data_directory, test_filename))
                     train_df = df
 
+                # Parse transform parameters if transform is selected
+                transform_config = None
+                if transform_name and transform_table:
+                    try:
+                        transform_params = {
+                            p["Parameter"]: p["Value"] for p in transform_table["props"]["data"] if p["Parameter"]
+                        }
+                        transform_config = {"name": transform_name, "params": transform_params}
+                    except Exception as e:
+                        logger.warning(f"Could not parse transform parameters: {e}")
+
                 params = ForecastModel.parse_parameters(
                     param_info=ForecastModel.get_parameter_info(algorithm),
                     params={p["Parameter"]: p["Value"] for p in table["props"]["data"] if p["Parameter"]},
                 )
                 model, train_metrics, test_metrics, figure = ForecastModel().train(
-                    algorithm, train_df, test_df, target_col, feature_cols, exog_cols, params, set_progress
+                    algorithm,
+                    train_df,
+                    test_df,
+                    target_col,
+                    feature_cols,
+                    exog_cols,
+                    params,
+                    set_progress,
+                    transform_config=transform_config,
                 )
                 ForecastModel.save_model(file_manager.model_directory, model, algorithm)
                 train_metric_table = create_metric_table(train_metrics)

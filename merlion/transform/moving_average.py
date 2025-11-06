@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2023 salesforce.com, inc.
+# Copyright (c) 2025 salesforce.com, inc.
 # All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 # For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/BSD-3-Clause
@@ -51,6 +51,21 @@ class MovingAverage(InvertibleTransformBase):
     @property
     def _n_pad(self):
         return len(self.weights) - 1
+
+    def to_dict(self):
+        """Override to_dict to convert numpy array weights to list for JSON serialization."""
+        state = {"name": type(self).__name__}
+        state["n_steps"] = self.n_steps
+        # Convert numpy array to list for JSON serialization
+        state["weights"] = self.weights.tolist() if isinstance(self.weights, np.ndarray) else list(self.weights)
+        return state
+
+    @classmethod
+    def from_dict(cls, state: dict):
+        """Override from_dict to handle weights as list."""
+        # Remove 'name' if present
+        state = {k: v for k, v in state.items() if k != "name"}
+        return cls(**state)
 
     def train(self, time_series: TimeSeries):
         pass
@@ -185,7 +200,7 @@ class ExponentialMovingAverage(InvertibleTransformBase):
             new_vars[name] = UnivariateTimeSeries.from_pd(ema)
             if self.ci:
                 ems = emw.std()
-                ems[0] = ems[1]
+                ems.iloc[0] = ems.iloc[1]  # Use iloc instead of direct indexing
                 new_vars[f"{name}_lb"] = UnivariateTimeSeries.from_pd(ema + norm.ppf(0.5 * (1 - self.p)) * ems)
                 new_vars[f"{name}_ub"] = UnivariateTimeSeries.from_pd(ema + norm.ppf(0.5 * (1 + self.p)) * ems)
 

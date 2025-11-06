@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2023 salesforce.com, inc.
+# Copyright (c) 2025 salesforce.com, inc.
 # All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 # For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/BSD-3-Clause
@@ -49,7 +49,18 @@ class ForecastModel(ModelMixin, DataMixin):
             for m in ["MAE", "MARRE", "RMSE", "sMAPE", "RMSPE"]
         }
 
-    def train(self, algorithm, train_df, test_df, target_column, feature_columns, exog_columns, params, set_progress):
+    def train(
+        self,
+        algorithm,
+        train_df,
+        test_df,
+        target_column,
+        feature_columns,
+        exog_columns,
+        params,
+        set_progress,
+        transform_config=None,
+    ):
         if target_column not in train_df:
             target_column = int(target_column)
         assert target_column in train_df, f"The target variable {target_column} is not in the time series."
@@ -71,6 +82,17 @@ class ForecastModel(ModelMixin, DataMixin):
 
         # Get the target_seq_index & initialize the model
         params["target_seq_index"] = columns.index(target_column)
+
+        # Handle transform if provided - DON'T add to model config yet
+        # We'll apply it manually and then add the trained transform to the model
+        user_transform = None
+        train_ts_original = None
+        if transform_config:
+            from merlion.dashboard.utils.transform_utils import create_transform_sequence
+
+            self.logger.info(f"Creating transform: {transform_config['name']}...")
+            user_transform = create_transform_sequence([transform_config])
+
         model_class = ModelFactory.get_model_class(algorithm)
         model = model_class(model_class.config_class(**params))
 
@@ -85,6 +107,22 @@ class ForecastModel(ModelMixin, DataMixin):
         self.logger.info(f"Training the forecasting model: {algorithm}...")
         set_progress(("2", "10"))
         train_ts = TimeSeries.from_pd(train_df)
+
+        # Apply user transform if provided
+        if user_transform:
+            train_ts_original = train_ts
+            self.logger.info(f"Training and applying transform: {transform_config['name']}...")
+            user_transform.train(train_ts)
+            train_ts = user_transform(train_ts)
+            # Now add the TRAINED transform to the model's transform
+            if model.transform is not None:
+                # Model already has a transform (e.g., normalization), combine them
+                from merlion.transform.sequence import TransformSequence
+
+                model.transform = TransformSequence([user_transform, model.transform])
+            else:
+                model.transform = user_transform
+
         predictions = model.train(train_ts, exog_data=exog_ts)
         if isinstance(predictions, tuple):
             predictions = predictions[0]
@@ -106,9 +144,37 @@ class ForecastModel(ModelMixin, DataMixin):
         set_progress(("8", "10"))
 
         self.logger.info("Plotting forecasting results...")
+
+        # Use original plotting (transform inversion happens automatically in model.forecast)
         figure = model.plot_forecast_plotly(
             time_series=test_ts, time_series_prev=train_ts, exog_data=exog_ts, plot_forecast_uncertainty=True
         )
+
+        # Optional: Add transformed data trace to show the transformation effect
+        # Disabled for now - uncomment the code below to enable
+        # if transform_config and train_ts_original is not None:
+        #     import plotly.graph_objs as go
+        #
+        #     # Get the variable name for plotting
+        #     var_name = train_ts.names[0]
+        #
+        #     # Check if transformation actually changed the data
+        #     train_orig_df = train_ts_original.to_pd()
+        #     train_trans_df = train_ts.to_pd()
+        #
+        #     if not train_orig_df.equals(train_trans_df):
+        #         # Add transformed data trace (insert after the training data trace)
+        #         transformed_trace = go.Scatter(
+        #             x=train_trans_df.index,
+        #             y=train_trans_df[var_name] if var_name in train_trans_df.columns else train_trans_df.iloc[:, 0],
+        #             name=f"Transformed ({transform_config['name']})",
+        #             mode="lines",
+        #             line=dict(color="orange", width=1.5, dash="dot"),
+        #             opacity=0.7
+        #         )
+        #         # Add the trace to the figure (after the first trace which is the training data)
+        #         figure.add_trace(transformed_trace, row=1, col=1)
+
         figure.update_layout(width=None, height=500)
         self.logger.info("Finished.")
         set_progress(("10", "10"))
