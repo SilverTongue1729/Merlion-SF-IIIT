@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2023 salesforce.com, inc.
+# Copyright (c) 2025 salesforce.com, inc.
 # All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 # For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/BSD-3-Clause
@@ -35,3 +35,5 @@ following interface, in addition to ``model.save()`` and ``ForecasterClass.load`
     -   returns the model's prediction ``train_data``, in the same format as if you called `ForecasterBase.forecast`
         on the time stamps of ``train_data``
 """
+
+from merlion.models.forecast.moirai import Moirai, MoiraiConfig

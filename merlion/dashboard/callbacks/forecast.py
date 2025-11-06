@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2023 salesforce.com, inc.
+# Copyright (c) 2025 salesforce.com, inc.
 # All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 # For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/BSD-3-Clause
@@ -168,6 +168,10 @@ def select_algorithm(algorithm):
         State("forecasting-training-slider", "value"),
         State("forecasting-select-test-file", "value"),
         State("forecasting-file-radio", "value"),
+        State("forecasting-mode-radio", "value"),
+        State("forecasting-rolling-window-size", "value"),
+        State("forecasting-context-length", "value"),
+        State("forecasting-prediction-stride", "value"),
     ],
     running=[
         (Output("forecasting-train-btn", "disabled"), True, False),
@@ -191,6 +195,10 @@ def click_train_test(
     train_percentage,
     test_filename,
     file_mode,
+    forecast_mode,
+    rolling_window_size,
+    context_length,
+    prediction_stride,
 ):
     ctx = dash.callback_context
     modal_is_open = False
@@ -225,7 +233,18 @@ def click_train_test(
                     params={p["Parameter"]: p["Value"] for p in table["props"]["data"] if p["Parameter"]},
                 )
                 model, train_metrics, test_metrics, figure = ForecastModel().train(
-                    algorithm, train_df, test_df, target_col, feature_cols, exog_cols, params, set_progress
+                    algorithm,
+                    train_df,
+                    test_df,
+                    target_col,
+                    feature_cols,
+                    exog_cols,
+                    params,
+                    set_progress,
+                    forecast_mode=forecast_mode,
+                    rolling_window_size=rolling_window_size,
+                    context_length=context_length if context_length else 168,
+                    prediction_stride=prediction_stride,
                 )
                 ForecastModel.save_model(file_manager.model_directory, model, algorithm)
                 train_metric_table = create_metric_table(train_metrics)
@@ -251,3 +270,21 @@ def set_file_mode(value):
         return True, False
     else:
         return False, True
+
+
+@callback(
+    Output("forecasting-rolling-collapse", "is_open"),
+    Output("forecasting-mode-description", "children"),
+    Input("forecasting-mode-radio", "value"),
+)
+def set_forecast_mode(value):
+    if value == "rolling_update":
+        description = "Context Update mode: After each prediction window, the context is updated with actual values. Simulates online learning."
+        return True, description
+    elif value == "rolling_sliding":
+        description = (
+            "Sliding Window mode: Uses fixed-size sliding window across the test data. Efficient, no retraining needed."
+        )
+        return True, description
+    else:
+        return False, "Single forecast mode: Predict all test steps at once."

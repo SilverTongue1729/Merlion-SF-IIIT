@@ -51,6 +51,7 @@ Deep Learning models:
     etsformer
     informer
     transformer
+    moirai
 
 
 Note that the AutoML variants
@@ -170,6 +171,13 @@ forecast.informer
 forecast.transformer
 ^^^^^^^^^^^^^^^^^^^^
 .. automodule:: merlion.models.forecast.transformer
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+forecast.moirai
+^^^^^^^^^^^^^^^
+.. automodule:: merlion.models.forecast.moirai
    :members:
    :undoc-members:
    :show-inheritance:

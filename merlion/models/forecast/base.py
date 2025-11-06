@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2023 salesforce.com, inc.
+# Copyright (c) 2025 salesforce.com, inc.
 # All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 # For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/BSD-3-Clause
@@ -448,6 +448,152 @@ class ForecasterBase(ModelBase):
             )
             out_list.append(out)
         return tuple(zip(*out_list))
+
+    def rolling_forecast(
+        self,
+        time_series: TimeSeries,
+        context_length: int,
+        prediction_length: int,
+        prediction_stride: Optional[int] = None,
+        exog_data: TimeSeries = None,
+        return_iqr: bool = False,
+    ) -> Union[Tuple[TimeSeries, Optional[TimeSeries]], Tuple[TimeSeries, TimeSeries, TimeSeries]]:
+        """
+        Perform rolling window forecasting on a time series. This method slides a window across the time series,
+        using a fixed-size context window to make predictions for the next prediction_length steps.
+
+        :param time_series: The full time series to perform rolling forecasts on.
+        :param context_length: Number of time steps to use as context for each prediction.
+        :param prediction_length: Number of time steps to predict in each window.
+        :param prediction_stride: Number of time steps to move the window forward between predictions.
+            If ``None``, defaults to ``prediction_length`` (non-overlapping windows).
+        :param exog_data: A time series of exogenous variables. Exogenous variables are known a priori.
+            Optional. Only supported for models which inherit from `ForecasterExogBase`.
+        :param return_iqr: whether to return the inter-quartile range for the forecast.
+            Only supported by models which can return error bars.
+        :return: ``(forecast, forecast_stderr)`` if ``return_iqr`` is false,
+            ``(forecast, forecast_lb, forecast_ub)`` otherwise.
+
+            - ``forecast``: concatenated forecasts for all rolling windows
+            - ``forecast_stderr``: the standard error of each forecast value. May be ``None``.
+            - ``forecast_lb``: 25th percentile of forecast values for each timestamp
+            - ``forecast_ub``: 75th percentile of forecast values for each timestamp
+        """
+        if prediction_stride is None:
+            prediction_stride = prediction_length
+
+        # Convert to DataFrame for easier slicing
+        ts_df = time_series.to_pd()
+        total_length = len(ts_df)
+
+        # Calculate the number of rolling windows
+        if total_length < context_length + prediction_length:
+            raise ValueError(
+                f"Time series length ({total_length}) is too short for context_length ({context_length}) "
+                f"+ prediction_length ({prediction_length})"
+            )
+
+        # Collect all forecasts
+        all_forecasts = []
+        all_errors = [] if not return_iqr else None
+        all_lbs = [] if return_iqr else None
+        all_ubs = [] if return_iqr else None
+        prediction_timestamps = []
+
+        # Slide the window across the time series
+        start_idx = 0
+        while start_idx + context_length + prediction_length <= total_length:
+            # Get context window
+            context_end_idx = start_idx + context_length
+            pred_end_idx = min(context_end_idx + prediction_length, total_length)
+
+            # Extract context and prediction timestamps
+            context_ts = TimeSeries.from_pd(ts_df.iloc[start_idx:context_end_idx])
+            pred_timestamps = ts_df.index[context_end_idx:pred_end_idx].tolist()
+
+            # Extract exog data for this window if provided
+            window_exog_data = None
+            if exog_data is not None:
+                exog_df = exog_data.to_pd()
+                # Include exog data for both context and prediction windows
+                window_exog_df = exog_df.iloc[start_idx:pred_end_idx]
+                window_exog_data = TimeSeries.from_pd(window_exog_df)
+
+            # Make forecast for this window
+            if return_iqr:
+                forecast, lb, ub = self.forecast(
+                    time_stamps=pred_timestamps,
+                    time_series_prev=context_ts,
+                    exog_data=window_exog_data,
+                    return_iqr=True,
+                )
+                all_forecasts.append(forecast)
+                all_lbs.append(lb)
+                all_ubs.append(ub)
+            else:
+                forecast, err = self.forecast(
+                    time_stamps=pred_timestamps,
+                    time_series_prev=context_ts,
+                    exog_data=window_exog_data,
+                    return_iqr=False,
+                )
+                all_forecasts.append(forecast)
+                all_errors.append(err)
+
+            # Store prediction timestamps
+            prediction_timestamps.extend(pred_timestamps)
+
+            # Move window forward
+            start_idx += prediction_stride
+
+            # Break if we can't make another full prediction
+            if start_idx + context_length + prediction_length > total_length:
+                break
+
+        # Concatenate all forecasts
+        # Remove duplicates by keeping only the first prediction for each timestamp
+        if len(all_forecasts) == 0:
+            raise ValueError("No forecasts were generated. Check your window parameters.")
+
+        # Create a combined forecast DataFrame
+        forecast_dfs = [f.to_pd() for f in all_forecasts]
+        combined_forecast_df = pd.concat(forecast_dfs)
+
+        # Remove duplicate timestamps (keep first occurrence)
+        combined_forecast_df = combined_forecast_df[~combined_forecast_df.index.duplicated(keep="first")]
+        combined_forecast = TimeSeries.from_pd(combined_forecast_df)
+
+        if return_iqr:
+            # Combine lower and upper bounds
+            lb_dfs = [lb.to_pd() if lb is not None else None for lb in all_lbs]
+            ub_dfs = [ub.to_pd() if ub is not None else None for ub in all_ubs]
+
+            if all(lb is not None for lb in lb_dfs):
+                combined_lb_df = pd.concat(lb_dfs)
+                combined_lb_df = combined_lb_df[~combined_lb_df.index.duplicated(keep="first")]
+                combined_lb = TimeSeries.from_pd(combined_lb_df)
+            else:
+                combined_lb = None
+
+            if all(ub is not None for ub in ub_dfs):
+                combined_ub_df = pd.concat(ub_dfs)
+                combined_ub_df = combined_ub_df[~combined_ub_df.index.duplicated(keep="first")]
+                combined_ub = TimeSeries.from_pd(combined_ub_df)
+            else:
+                combined_ub = None
+
+            return combined_forecast, combined_lb, combined_ub
+        else:
+            # Combine errors
+            err_dfs = [err.to_pd() if err is not None else None for err in all_errors]
+            if all(err is not None for err in err_dfs):
+                combined_err_df = pd.concat(err_dfs)
+                combined_err_df = combined_err_df[~combined_err_df.index.duplicated(keep="first")]
+                combined_err = TimeSeries.from_pd(combined_err_df)
+            else:
+                combined_err = None
+
+            return combined_forecast, combined_err
 
     def get_figure(
         self,

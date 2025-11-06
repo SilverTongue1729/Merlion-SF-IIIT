@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2023 salesforce.com, inc.
+# Copyright (c) 2025 salesforce.com, inc.
 # All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 # For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/BSD-3-Clause
@@ -315,7 +315,8 @@ class Figure:
                     name=yhat_label,
                     x=yhat.index,
                     y=yhat.np_values,
-                    mode="lines",
+                    mode="lines+markers",
+                    marker=dict(size=4),
                     line=dict(color=self.yhat_color, width=line_width),
                     fillcolor=error_color,
                     fill=fill_mode,

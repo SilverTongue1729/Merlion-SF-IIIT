@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2023 salesforce.com, inc.
+# Copyright (c) 2025 salesforce.com, inc.
 # All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 # For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/BSD-3-Clause
@@ -92,6 +92,72 @@ def create_control_panel() -> html.Div:
             html.Div(
                 id="forecasting-select-algorithm-parent",
                 children=[dcc.Dropdown(id="forecasting-select-algorithm", options=[], style={"width": "100%"})],
+            ),
+            html.Br(),
+            html.P("Forecast Mode"),
+            dbc.RadioItems(
+                id="forecasting-mode-radio",
+                options=[
+                    {"label": "Single Forecast (fastest, predict all at once)", "value": "single"},
+                    {
+                        "label": "Rolling Forecast - Context Update (updates with actual values)",
+                        "value": "rolling_update",
+                    },
+                    {
+                        "label": "Rolling Forecast - Sliding Window (efficient, no retraining)",
+                        "value": "rolling_sliding",
+                    },
+                ],
+                value="single",
+                inline=False,
+            ),
+            dbc.Collapse(
+                html.Div(
+                    id="control-card",
+                    children=[
+                        html.Br(),
+                        html.P("Context Length (historical steps for prediction)"),
+                        dcc.Input(
+                            id="forecasting-context-length",
+                            type="number",
+                            value=168,
+                            min=1,
+                            max=2000,
+                            step=1,
+                            style={"width": "100%"},
+                        ),
+                        html.Br(),
+                        html.P("Prediction Length (steps to predict per window)"),
+                        dcc.Input(
+                            id="forecasting-rolling-window-size",
+                            type="number",
+                            value=24,
+                            min=1,
+                            max=500,
+                            step=1,
+                            style={"width": "100%"},
+                        ),
+                        html.Br(),
+                        html.P("Prediction Stride (steps to move window, leave empty for non-overlapping)"),
+                        dcc.Input(
+                            id="forecasting-prediction-stride",
+                            type="number",
+                            value=None,
+                            min=1,
+                            max=500,
+                            step=1,
+                            style={"width": "100%"},
+                        ),
+                        html.Br(),
+                        html.Small(
+                            id="forecasting-mode-description",
+                            children="Context Update: Updates context with actual values after each window. "
+                            "Sliding Window: Uses fixed-size sliding window without incorporating actuals.",
+                        ),
+                    ],
+                ),
+                id="forecasting-rolling-collapse",
+                is_open=False,
             ),
             html.Br(),
             html.P("Algorithm Setting"),

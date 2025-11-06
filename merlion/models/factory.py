@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2023 salesforce.com, inc.
+# Copyright (c) 2025 salesforce.com, inc.
 # All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 # For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/BSD-3-Clause
@@ -60,6 +60,7 @@ import_alias = dict(
     AutoformerForecaster="merlion.models.forecast.autoformer:AutoformerForecaster",
     ETSformerForecaster="merlion.models.forecast.etsformer:ETSformerForecaster",
     DeepARForecaster="merlion.models.forecast.deep_ar:DeepARForecaster",
+    Moirai="merlion.models.forecast.moirai:Moirai",
     # Ensembles
     DetectorEnsemble="merlion.models.ensemble.anomaly:DetectorEnsemble",
     ForecasterEnsemble="merlion.models.ensemble.forecast:ForecasterEnsemble",

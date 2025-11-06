@@ -17,3 +17,5 @@ Icon?
 docs/build/*
 .ipynb_checkpoints
 venv/
+NEW_FEATURES.md
+NEW_FEATURES_EXAMPLES.ipynb
