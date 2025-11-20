@@ -12,6 +12,10 @@ from typing import Type
 from merlion.transform.base import TransformBase
 from merlion.utils import dynamic_import
 
+from merlion.transform.my_augmentations import (
+    ConvexHullMethod, RollingMeans, PeakMultiplier
+)
+
 
 import_alias = dict(
     Identity="merlion.transform.base:Identity",
@@ -31,6 +35,9 @@ import_alias = dict(
     TransformSequence="merlion.transform.sequence:TransformSequence",
     TransformStack="merlion.transform.sequence:TransformStack",
     InvertibleTransformSequence="merlion.transform.sequence:InvertibleTransformSequence",
+    ConvexHullMethod="merlion.transform.my_augmentations:ConvexHullMethod",
+    RollingMeans="merlion.transform.my_augmentations:RollingMeans",
+    PeakMultiplier="merlion.transform.my_augmentations:PeakMultiplier",
 )
 
 

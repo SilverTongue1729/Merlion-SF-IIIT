@@ -14,6 +14,7 @@ from merlion.evaluate.forecast import ForecastEvaluator, ForecastMetric
 from merlion.utils.time_series import TimeSeries
 from merlion.dashboard.models.utils import ModelMixin, DataMixin
 from merlion.dashboard.utils.log import DashLogger
+from merlion.models.anomaly.base import DetectorConfig
 
 dash_logger = DashLogger(stream=sys.stdout)
 
@@ -107,14 +108,12 @@ class ForecastModel(ModelMixin, DataMixin):
         self.logger.info(f"Training the forecasting model: {algorithm}...")
         set_progress(("2", "10"))
         train_ts = TimeSeries.from_pd(train_df)
+        train_ts_original = train_ts
 
         # Apply user transform if provided
         if user_transform:
-            train_ts_original = train_ts
-            self.logger.info(f"Training and applying transform: {transform_config['name']}...")
-            user_transform.train(train_ts)
-            train_ts = user_transform(train_ts)
-            # Now add the TRAINED transform to the model's transform
+            self.logger.info(f"Adding transform to model: {transform_config['name']}...")
+            # Now add the transform to the model's transform
             if model.transform is not None:
                 # Model already has a transform (e.g., normalization), combine them
                 from merlion.transform.sequence import TransformSequence
@@ -122,6 +121,9 @@ class ForecastModel(ModelMixin, DataMixin):
                 model.transform = TransformSequence([user_transform, model.transform])
             else:
                 model.transform = user_transform
+            model.config.invert_transform = model.transform.proper_inversion and not isinstance(
+                model.config, DetectorConfig
+            )
 
         predictions = model.train(train_ts, exog_data=exog_ts)
         if isinstance(predictions, tuple):
@@ -130,7 +132,20 @@ class ForecastModel(ModelMixin, DataMixin):
         self.logger.info("Computing training performance metrics...")
         set_progress(("6", "10"))
         evaluator = ForecastEvaluator(model, config=ForecastEvaluator.config_class())
-        train_metrics = ForecastModel._compute_metrics(evaluator, train_ts, predictions)
+
+        is_custom_non_invertible = transform_config and transform_config["name"] in [
+            "PeakMultiplier",
+            "ConvexHullMethod",
+            "RollingMeans",
+        ]
+
+        if model.config.invert_transform:
+            ground_truth_train = train_ts
+        elif is_custom_non_invertible:
+            ground_truth_train = train_ts  # Evaluate against original data as requested
+        else:
+            ground_truth_train = model.transform(train_ts)
+        train_metrics = ForecastModel._compute_metrics(evaluator, ground_truth_train, predictions)
         set_progress(("7", "10"))
 
         test_ts = TimeSeries.from_pd(test_df)
@@ -139,43 +154,93 @@ class ForecastModel(ModelMixin, DataMixin):
             test_ts, _ = test_ts.bisect(t=test_ts.time_stamps[n])
 
         self.logger.info("Computing test performance metrics...")
-        test_pred, test_err = model.forecast(time_stamps=test_ts.time_stamps, exog_data=exog_ts)
-        test_metrics = ForecastModel._compute_metrics(evaluator, test_ts, test_pred)
+        # Get predictions and IQR bounds in one call
+        test_pred, lb, ub = model.forecast(
+            time_stamps=test_ts.time_stamps, exog_data=exog_ts, return_iqr=True
+        )
+
+        # Metrics are calculated by comparing predictions against original data for the custom transforms
+        if model.config.invert_transform:
+            ground_truth_test = test_ts
+        elif is_custom_non_invertible:
+            ground_truth_test = test_ts  # Evaluate against original data as requested
+        else:
+            ground_truth_test = model.transform(test_ts)
+        test_metrics = ForecastModel._compute_metrics(evaluator, ground_truth_test, test_pred)
         set_progress(("8", "10"))
 
         self.logger.info("Plotting forecasting results...")
+        import plotly.graph_objs as go
 
-        # Use original plotting (transform inversion happens automatically in model.forecast)
-        figure = model.plot_forecast_plotly(
-            time_series=test_ts, time_series_prev=train_ts, exog_data=exog_ts, plot_forecast_uncertainty=True
+        figure = go.Figure()
+
+        # 1. Original test data
+        original_test_df = test_ts.to_pd()
+        var_name = original_test_df.columns[0]
+        figure.add_trace(
+            go.Scatter(
+                x=original_test_df.index,
+                y=original_test_df[var_name],
+                name="Original Test Data",
+                mode="lines",
+                line=dict(color="blue"),
+            )
         )
 
-        # Optional: Add transformed data trace to show the transformation effect
-        # Disabled for now - uncomment the code below to enable
-        # if transform_config and train_ts_original is not None:
-        #     import plotly.graph_objs as go
-        #
-        #     # Get the variable name for plotting
-        #     var_name = train_ts.names[0]
-        #
-        #     # Check if transformation actually changed the data
-        #     train_orig_df = train_ts_original.to_pd()
-        #     train_trans_df = train_ts.to_pd()
-        #
-        #     if not train_orig_df.equals(train_trans_df):
-        #         # Add transformed data trace (insert after the training data trace)
-        #         transformed_trace = go.Scatter(
-        #             x=train_trans_df.index,
-        #             y=train_trans_df[var_name] if var_name in train_trans_df.columns else train_trans_df.iloc[:, 0],
-        #             name=f"Transformed ({transform_config['name']})",
-        #             mode="lines",
-        #             line=dict(color="orange", width=1.5, dash="dot"),
-        #             opacity=0.7
-        #         )
-        #         # Add the trace to the figure (after the first trace which is the training data)
-        #         figure.add_trace(transformed_trace, row=1, col=1)
+        # 2. Transformed test data (if applicable)
+        if user_transform:
+            transformed_test = model.transform(test_ts)
+            transformed_test_df = transformed_test.to_pd()
+            figure.add_trace(
+                go.Scatter(
+                    x=transformed_test_df.index,
+                    y=transformed_test_df[var_name],
+                    name="Transformed Test Data",
+                    mode="lines",
+                    line=dict(color="orange", dash="dot"),
+                )
+            )
 
-        figure.update_layout(width=None, height=500)
+        # 3. Predicted data
+        test_pred_df = test_pred.to_pd()
+        figure.add_trace(
+            go.Scatter(
+                x=test_pred_df.index,
+                y=test_pred_df[test_pred.names[0]],
+                name="Prediction",
+                mode="lines",
+                line=dict(color="green"),
+            )
+        )
+
+        # 4. Uncertainty bounds
+        if lb is not None and ub is not None:
+            lb_df = lb.to_pd()
+            ub_df = ub.to_pd()
+            figure.add_trace(
+                go.Scatter(
+                    x=lb_df.index,
+                    y=lb_df[lb.names[0]],
+                    name="Lower Bound",
+                    mode="lines",
+                    line=dict(width=0),
+                    showlegend=False,
+                )
+            )
+            figure.add_trace(
+                go.Scatter(
+                    x=ub_df.index,
+                    y=ub_df[ub.names[0]],
+                    name="Upper Bound",
+                    mode="lines",
+                    line=dict(width=0),
+                    fillcolor="rgba(0, 176, 246, 0.2)",
+                    fill="tonexty",
+                    showlegend=False,
+                )
+            )
+
+        figure.update_layout(width=None, height=500, title_text="Forecast on Test Data")
         self.logger.info("Finished.")
         set_progress(("10", "10"))
 

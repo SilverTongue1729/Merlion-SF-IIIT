@@ -26,6 +26,9 @@ COMMON_TRANSFORMS = {
     "SpikeAmplification": {"spike_threshold_quantile": 0.75, "amplification_factor": 1.5, "use_power": False},
     "BoxCoxTransform": {"lmbda": None},
     "LowerUpperClip": {"lower": -100.0, "upper": 100.0},  # Provide reasonable defaults instead of None
+    "ConvexHullMethod": {"slope_limit": 1000000000.0, "relaxation_tp": 10},
+    "RollingMeans": {"window_size": 5},
+    "PeakMultiplier": {"peak_multiplier": 1.5, "peak_threshold": 8.0, "hill_dist": 5},
 }
 
 

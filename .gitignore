@@ -17,6 +17,7 @@ Icon?
 docs/build/*
 .ipynb_checkpoints
 venv/
+Merlion-dashboard
 # Local reference files (not tracked)
 NEW_FEATURES.md
 NEW_FEATURES_EXAMPLES.ipynb
